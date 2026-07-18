@@ -2,7 +2,7 @@
 
 Serviço de Links do Tech Challenge FIAP X (fase 5), conforme a spec `arquitetura-video-processing-tech-challenge.md`. Fonte única da verdade do domínio de links (ADR-007): API HTTP (Gin), máquina de estados, persistência em DynamoDB (`Links`/`LinkEvents` com TTL nativo), presigned URLs do S3, consumer contínuo da `video-processing-status-queue` e publicação no `notification-topic` em falha de processamento (ADR-008).
 
-O **users-service não existe ainda** — a resolução de e-mail/nome usa um mock (`USE_USER_SVC_MOCK=true`, padrão). Quando a svc ficar pronta, basta `USE_USER_SVC_MOCK=false` + `USERS_BASE_URL` (o client HTTP do contrato `GET /internal/users/:id` já está implementado).
+O **users-api não está no ar ainda** — a resolução de e-mail/nome usa um mock (`USE_USER_SVC_MOCK=true`, padrão). Quando a svc ficar pronta, basta `USE_USER_SVC_MOCK=false` + `USERS_BASE_URL` (o client HTTP do contrato real `GET /users/:id` já está implementado — a antiga rota interna `/internal/users/:id` foi eliminada pela plataforma no ADR-012; o client assina um service token HS256 com o mesmo segredo compartilhado `jwt-signing-key`).
 
 O **authorizer** (Lambda) também está fora do escopo — um middleware JWT (HS256) simula o comportamento: valida o token e injeta `userId`/`role`.
 

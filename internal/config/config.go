@@ -34,7 +34,7 @@ func Load() Config {
 		StatusQueueURL:  os.Getenv("STATUS_QUEUE_URL"),
 		NotificationARN: os.Getenv("NOTIFICATION_TOPIC_ARN"),
 		UseUserSvcMock:  getbool("USE_USER_SVC_MOCK", true),
-		UsersBaseURL:    getenv("USERS_BASE_URL", "http://users-service.default.svc.cluster.local"),
+		UsersBaseURL:    getenv("USERS_BASE_URL", "http://video-processor-users-api-svc.default.svc.cluster.local"),
 	}
 }
 

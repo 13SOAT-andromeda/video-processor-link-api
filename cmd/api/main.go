@@ -72,7 +72,7 @@ func main() {
 		usersClient = users.NewMockClient()
 		log.Info("users client: mock (USE_USER_SVC_MOCK=true)")
 	} else {
-		usersClient = users.NewHTTPClient(cfg.UsersBaseURL)
+		usersClient = users.NewHTTPClient(cfg.UsersBaseURL, cfg.JWTSecret)
 		log.Info("users client: http", "baseURL", cfg.UsersBaseURL)
 	}
 
