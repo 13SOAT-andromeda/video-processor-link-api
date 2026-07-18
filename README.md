@@ -147,7 +147,7 @@ deploy/localstack        docker-compose + bootstrap de recursos (dev local)
 
 ### Pré-requisitos
 
-- Go 1.22+
+- Go 1.24+ (o módulo foi Go 1.22 até a integração do Datadog — dependências transitivas do `dd-trace-go` forçaram o bump; ver §9)
 - Docker (para o LocalStack) — este projeto foi testado em **WSL** com Docker Desktop (backend `wsl2`), mas qualquer Docker funciona
 - `aws` CLI (opcional — só para `make simulate-worker` e inspeção manual)
 
@@ -239,10 +239,37 @@ Ver [`.env.example`](.env.example) para o arquivo completo. Resumo:
 | `NOTIFICATION_TOPIC_ARN` | criada pelo bootstrap local | output `notification_events_topic_arn` do `iac-video-processor-infra` (o template `PROCESSING_FAILED` precisa estar cadastrado no `notification-service`) |
 | `USE_USER_SVC_MOCK` | `true` | `false` quando `users-api` estiver no ar |
 | `USERS_BASE_URL` | n/a (mock) | `http://video-processor-users-api-svc.default.svc.cluster.local` (Service real do cluster) |
+| `DD_AGENT_HOST` | vazio (tracer desligado) | Downward API `status.hostIP` (agent roda como DaemonSet no node) |
+| `DD_SERVICE` / `DD_ENV` / `DD_VERSION` | `video-processor-link-api` / `dev` / `dev` | `video-processor-link-api` / `prod` / tag da imagem publicada |
 
 ---
 
-## 9. Testes
+## 9. Observabilidade (Datadog)
+
+APM via [`gopkg.in/DataDog/dd-trace-go.v1`](https://github.com/DataDog/dd-trace-go) — **v1**, não v2: a v2 (`github.com/DataDog/dd-trace-go/v2`) exige Go 1.25; a v1 aceita `go 1.22` no seu próprio `go.mod`, mas suas dependências transitivas forçaram o `go mod tidy` deste repositório a subir de `go 1.22` para **`go 1.24.0`** (não ficou parado em 1.22 como seria o ideal — o `Dockerfile` foi ajustado de `golang:1.22-alpine` para `golang:1.24-alpine` por causa disso, e o build da imagem foi validado). Ainda assim, é um bump bem menor que o exigido pela v2 (1.25). Se o `go.mod` for atualizado para 1.25+ no futuro, migrar para v2 é uma opção a reavaliar.
+
+**Nível aplicação** (este repositório):
+- `cmd/api/main.go` inicia o tracer (`tracer.Start`) só se `DD_AGENT_HOST` estiver configurado — mesmo padrão "vazio = desligado" já usado por `STATUS_QUEUE_URL`/`NOTIFICATION_TOPIC_ARN`. Sem agent configurado, nenhuma tentativa de conexão é feita.
+- Middleware `gintrace.Middleware` instrumenta todas as rotas HTTP (spans por request, com status code, rota, latência).
+- `ddaws.AppendMiddleware` instrumenta o `aws.Config` compartilhado — toda chamada DynamoDB/S3/SQS/SNS feita pelo serviço (incluindo as do consumer da status-queue) vira automaticamente um span filho, sem precisar instrumentar cada client individualmente.
+- Testado localmente: com `DD_AGENT_HOST` setado mas nenhum agent real escutando, o tracer loga um `WARN` e degrada graciosamente — não derruba a aplicação nem bloqueia requisições (confirmado via teste manual).
+
+**Nível infraestrutura** (`iac-video-processor-infra`): o Datadog Agent roda como Helm release (`datadog/datadog`, chart oficial) no cluster EKS — DaemonSet de node agent + Cluster Agent, coletando métricas de infraestrutura/containers, logs (autodiscovery) e recebendo os traces de APM enviados pelas aplicações via `DD_AGENT_HOST`. Ver o Terraform daquele repositório (`prod/datadog.tf`) para o detalhe — só existe em `prod/`, já que o LocalStack Community usado em `dev/` não roda um control plane Kubernetes real (mesma limitação documentada para o AWS Load Balancer Controller).
+
+**Em aberto:** como este repositório ainda não tem manifests Kubernetes (`k8s/base`, ver §11), o `DD_AGENT_HOST` do pod real (via Downward API `status.hostIP`) fica pendente de quando esses manifests forem criados — o código já está pronto para recebê-lo.
+
+Para testar localmente com um agent de verdade (opcional, requer uma API key Datadog — nunca compartilhe a sua num arquivo versionado):
+
+```bash
+docker run -d --name dd-agent -p 8126:8126 \
+  -e DD_API_KEY=<sua-chave> -e DD_APM_ENABLED=true -e DD_SITE=datadoghq.com \
+  gcr.io/datadoghq/agent:7
+# no .env: DD_AGENT_HOST=127.0.0.1
+```
+
+---
+
+## 10. Testes
 
 ```bash
 make test          # go vet ./... + go test ./... -v
@@ -252,20 +279,20 @@ Cobertura hoje: [`internal/domain/link`](internal/domain/link/status_test.go) (m
 
 ---
 
-## 10. Build & imagem Docker
+## 11. Build & imagem Docker
 
 ```bash
 docker build -t video-processor-link-api .
 ```
 
-Multi-stage ([`Dockerfile`](Dockerfile)): build em `golang:1.22-alpine`, runtime em `gcr.io/distroless/static-debian12:nonroot` (sem shell, usuário não-root). Em produção, a imagem é publicada no ECR `video-processor-link-api-prod` (provisionado pelo `iac-video-processor-infra`) e deployada no EKS atrás do path `/links` do Ingress centralizado.
+Multi-stage ([`Dockerfile`](Dockerfile)): build em `golang:1.24-alpine`, runtime em `gcr.io/distroless/static-debian12:nonroot` (sem shell, usuário não-root). Em produção, a imagem é publicada no ECR `video-processor-link-api-prod` (provisionado pelo `iac-video-processor-infra`) e deployada no EKS atrás do path `/links` do Ingress centralizado.
 
-**Em aberto:** este repositório ainda não tem manifests Kubernetes (`k8s/base`/`k8s/overlays`, no padrão usado pelo `users-api`) nem pipeline de CI/CD — só a imagem Docker e o Terraform de infra compartilhada (ECR, fila, rota do Ingress) já existem.
+**Em aberto:** este repositório ainda não tem manifests Kubernetes (`k8s/base`/`k8s/overlays`, no padrão usado pelo `users-api`) nem pipeline de CI/CD — só a imagem Docker e o Terraform de infra compartilhada (ECR, fila, rota do Ingress, Datadog Agent) já existem.
 
 ---
 
-## 11. Limitações conhecidas
+## 12. Limitações conhecidas
 
 - **`users-api` mock**: enquanto `USE_USER_SVC_MOCK=true`, qualquer `userId` resolve para um usuário determinístico fictício — não valida o comportamento real de erro (404, timeout) do client HTTP.
-- **Sem manifests K8s**: deploy real no EKS ainda depende de criar `k8s/base` (Deployment/Service/HPA) neste repositório.
+- **Sem manifests K8s**: deploy real no EKS ainda depende de criar `k8s/base` (Deployment/Service/HPA) neste repositório — inclusive para wire o `DD_AGENT_HOST` real via Downward API (ver §9).
 - **Notificação é melhor-esforço**: falha ao resolver usuário ou publicar no SNS nunca bloqueia a transição de status (já persistida antes) — só loga (ADR-008).

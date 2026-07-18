@@ -19,6 +19,13 @@ type Config struct {
 	NotificationARN string
 	UseUserSvcMock  bool   // true = mock; false = HTTP no users-service do cluster
 	UsersBaseURL    string // usado quando UseUserSvcMock=false
+
+	// Datadog (APM) — tracer só é iniciado se DDAgentHost não estiver vazio,
+	// mesmo padrão de "vazio = desligado" já usado por StatusQueueURL/NotificationARN.
+	DDAgentHost string
+	DDService   string
+	DDEnv       string
+	DDVersion   string
 }
 
 func Load() Config {
@@ -35,6 +42,11 @@ func Load() Config {
 		NotificationARN: os.Getenv("NOTIFICATION_TOPIC_ARN"),
 		UseUserSvcMock:  getbool("USE_USER_SVC_MOCK", true),
 		UsersBaseURL:    getenv("USERS_BASE_URL", "http://video-processor-users-api-svc.default.svc.cluster.local"),
+
+		DDAgentHost: os.Getenv("DD_AGENT_HOST"),
+		DDService:   getenv("DD_SERVICE", "video-processor-link-api"),
+		DDEnv:       getenv("DD_ENV", "dev"),
+		DDVersion:   getenv("DD_VERSION", "dev"),
 	}
 }
 

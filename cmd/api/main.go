@@ -18,6 +18,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
+	ddaws "gopkg.in/DataDog/dd-trace-go.v1/contrib/aws/aws-sdk-go-v2/aws"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+
 	"github.com/fiap/links-service/internal/adapters/dynamo"
 	"github.com/fiap/links-service/internal/adapters/httpapi"
 	"github.com/fiap/links-service/internal/adapters/notification"
@@ -35,10 +38,32 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Datadog APM — só inicia se DD_AGENT_HOST estiver configurado (mesmo
+	// padrão "vazio = desligado" já usado por STATUS_QUEUE_URL/NOTIFICATION_TOPIC_ARN).
+	// Em produção o agent roda como DaemonSet no EKS (iac-video-processor-infra);
+	// DD_AGENT_HOST é injetado via Downward API (status.hostIP) no manifest do pod.
+	if cfg.DDAgentHost != "" {
+		tracer.Start(
+			tracer.WithAgentAddr(cfg.DDAgentHost+":8126"),
+			tracer.WithService(cfg.DDService),
+			tracer.WithEnv(cfg.DDEnv),
+			tracer.WithServiceVersion(cfg.DDVersion),
+		)
+		defer tracer.Stop()
+		log.Info("datadog APM enabled", "agentAddr", cfg.DDAgentHost+":8126", "service", cfg.DDService, "env", cfg.DDEnv)
+	} else {
+		log.Info("datadog APM disabled (DD_AGENT_HOST não configurada)")
+	}
+
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.AWSRegion))
 	if err != nil {
 		log.Error("failed to load AWS config", "err", err)
 		os.Exit(1)
+	}
+	if cfg.DDAgentHost != "" {
+		// instrumenta dynamodb/s3/sqs/sns — cada chamada AWS SDK vira um span filho
+		// do span HTTP (rota) ou do span do consumer da status-queue.
+		ddaws.AppendMiddleware(&awsCfg)
 	}
 
 	// AWS_ENDPOINT_URL definido = LocalStack (dev local)
@@ -91,7 +116,11 @@ func main() {
 		log.Warn("STATUS_QUEUE_URL não configurada — consumer desabilitado")
 	}
 
-	router := httpapi.Router(svc, cfg.JWTSecret)
+	ddServiceName := ""
+	if cfg.DDAgentHost != "" {
+		ddServiceName = cfg.DDService
+	}
+	router := httpapi.Router(svc, cfg.JWTSecret, ddServiceName)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: router}
 
 	go func() {

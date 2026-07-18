@@ -6,6 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	gintrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/gin-gonic/gin"
+
 	"github.com/fiap/links-service/internal/app"
 	"github.com/fiap/links-service/internal/domain/link"
 )
@@ -17,10 +19,14 @@ type Handlers struct {
 func NewHandlers(svc *app.Service) *Handlers { return &Handlers{svc: svc} }
 
 // Router monta as rotas conforme o contrato da spec §5.
-func Router(svc *app.Service, jwtSecret string) *gin.Engine {
+// ddServiceName vazio desliga o middleware de tracing (Datadog não configurado).
+func Router(svc *app.Service, jwtSecret, ddServiceName string) *gin.Engine {
 	h := NewHandlers(svc)
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
+	if ddServiceName != "" {
+		r.Use(gintrace.Middleware(ddServiceName))
+	}
 
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 
