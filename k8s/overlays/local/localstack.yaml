@@ -1,0 +1,55 @@
+# LocalStack rodando dentro do próprio cluster kind — substitui o
+# docker-compose.yml (deploy/localstack/) só para este modo de teste via k8s.
+# Reaproveita o mesmo script de bootstrap (init-aws.sh) via configMapGenerator
+# no kustomization.yaml deste overlay — sem duplicar o script.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: localstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: localstack
+  template:
+    metadata:
+      labels:
+        app: localstack
+    spec:
+      containers:
+        - name: localstack
+          image: localstack/localstack:3.8
+          ports:
+            - containerPort: 4566
+          env:
+            - name: SERVICES
+              value: "dynamodb,s3,sqs,sns,sts,iam"
+          volumeMounts:
+            - name: init-script
+              mountPath: /etc/localstack/init/ready.d
+          readinessProbe:
+            httpGet:
+              path: /_localstack/health
+              port: 4566
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+      volumes:
+        - name: init-script
+          configMap:
+            name: localstack-init
+            defaultMode: 0755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: localstack-svc
+spec:
+  selector:
+    app: localstack
+  ports:
+    - port: 4566
+      targetPort: 4566

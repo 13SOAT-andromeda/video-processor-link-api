@@ -1,0 +1,49 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: default
+
+# Sem ingress.yaml aqui de propósito: o Ingress é único e centralizado no
+# repo iac-video-processor-infra (cobre /users e /links no mesmo ALB) — um
+# Ingress por serviço aqui criaria um segundo recurso disputando o mesmo ALB.
+resources:
+  - ../../base
+  - config.yaml
+
+# ECR_IMAGE é um placeholder — substituir pela URL real do ECR antes do apply
+# (ver instruções de deploy), ex.:
+#   kustomize edit set image video-processor-link-api=<account>.dkr.ecr.us-east-1.amazonaws.com/video-processor-link-api-prod:<tag>
+images:
+  - name: video-processor-link-api
+    newName: ECR_IMAGE
+
+secretGenerator:
+  - name: link-api-secrets
+    behavior: replace
+    envs:
+      - .env.secrets
+
+configMapGenerator:
+  - name: link-api-config
+    behavior: merge
+    envs:
+      - .env.host
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+patches:
+  - target:
+      kind: Deployment
+      name: video-processor-link-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: DD_AGENT_HOST
+            valueFrom:
+              fieldRef:
+                fieldPath: status.hostIP

@@ -31,6 +31,7 @@ token-admin:
 # simula o processing-worker publicando um evento na status-queue
 # uso: make simulate-worker LINK=<linkId> EVENT=PROCESSING_STARTED
 simulate-worker:
-	aws --endpoint-url=http://localhost:4566 sqs send-message \
+	AWS_DEFAULT_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
+	aws --endpoint-url=http://localhost:4566 --region us-east-1 sqs send-message \
 		--queue-url http://localhost:4566/000000000000/video-processing-status-queue \
 		--message-body '{"linkId":"$(LINK)","eventType":"$(EVENT)","s3ProcessedKey":"$(KEY)","reason":"$(REASON)"}'

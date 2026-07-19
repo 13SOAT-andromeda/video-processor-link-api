@@ -3,3 +3,8 @@ bin/
 *.exe
 coverage.out
 volume/
+
+# valores reais de deploy (URLs/ARNs com account id, JWT_SECRET real) —
+# nunca comitar; ver k8s/overlays/aws/*.env.*.example para o template
+k8s/overlays/aws/.env.host
+k8s/overlays/aws/.env.secrets

@@ -303,7 +303,31 @@ docker build -t video-processor-link-api .
 
 Multi-stage ([`Dockerfile`](Dockerfile)): build em `golang:1.24-alpine`, runtime em `gcr.io/distroless/static-debian12:nonroot` (sem shell, usuário não-root). Em produção, a imagem é publicada no ECR `video-processor-link-api-prod` (provisionado pelo `iac-video-processor-infra`) e deployada no EKS atrás do path `/links` do Ingress centralizado.
 
-**Em aberto:** este repositório ainda não tem manifests Kubernetes (`k8s/base`/`k8s/overlays`, no padrão usado pelo `users-api`) nem pipeline de CI/CD — só a imagem Docker e o Terraform de infra compartilhada (ECR, fila, rota do Ingress, Datadog Agent) já existem.
+**Em aberto:** ainda não existe pipeline de CI/CD — o build/push da imagem e o `kubectl apply -k` são manuais por enquanto.
+
+### Manifests Kubernetes (`k8s/`)
+
+Padrão Kustomize (`base/` + `overlays/`), no mesmo estilo usado pelo `users-api`:
+
+| Overlay | Uso |
+|---|---|
+| `k8s/overlays/local` | Cluster `kind` local — sobe LocalStack, ingress-nginx e o próprio serviço dentro do cluster. Ver `k8s/kind-config.yaml`. |
+| `k8s/overlays/aws` | Deploy real no EKS — Service `ClusterIP` (como roda de verdade, atrás do Ingress centralizado do `iac-video-processor-infra`). Precisa de `.env.host`/`.env.secrets` preenchidos (copiar dos `.example`) e da imagem publicada no ECR. |
+| `k8s/overlays/aws-loadbalancer-test` | Variante do `aws` **só para teste manual** — troca o Service pra `LoadBalancer`, criando um ELB com DNS público, pra testar o pod direto (sem passar pelo API Gateway/authorizer, que ainda não existem). Não é como roda em produção — é descartável, apagar depois de testar. |
+
+```bash
+# teste local (kind)
+kind create cluster --name links-local --config k8s/kind-config.yaml
+docker build -t video-processor-link-api:latest .
+kind load docker-image video-processor-link-api:latest --name links-local
+kubectl apply -k k8s/overlays/local
+
+# teste direto na AWS real, com URL pública temporária
+kubectl apply -k k8s/overlays/aws-loadbalancer-test
+kubectl get svc video-processor-link-api-svc   # EXTERNAL-IP quando o ELB terminar de provisionar
+# ... testar ...
+kubectl delete -k k8s/overlays/aws-loadbalancer-test   # não esquecer de derrubar o ELB
+```
 
 ---
 
