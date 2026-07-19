@@ -177,6 +177,22 @@ curl -s http://localhost:4566/_localstack/health   # dynamodb/s3/sqs/sns "availa
 docker logs links-localstack | tail -20              # deve terminar com "Ready."
 ```
 
+`sts`/`iam` também estão habilitados na lista de `SERVICES` do [`docker-compose.yml`](deploy/localstack/docker-compose.yml) — não são usados pelo `links-service` em si, mas ferramentas de inspeção (AWS CLI, extensão **AWS Toolkit** do VS Code) chamam `sts:GetCallerIdentity` para validar a conexão antes de listar qualquer recurso; sem eles, a conexão falha com `Service 'sts' is not enabled`.
+
+### Inspecionando os recursos manualmente
+
+Com `AWS_ACCESS_KEY_ID=test`, `AWS_SECRET_ACCESS_KEY=test` e `AWS_DEFAULT_REGION=us-east-1` exportadas, use `awslocal` (wrapper do `aws` CLI que já injeta `--endpoint-url=http://localhost:4566`):
+
+```bash
+awslocal dynamodb scan --table-name Links
+awslocal dynamodb scan --table-name LinkEvents
+awslocal sqs get-queue-attributes --queue-url http://localhost:4566/000000000000/video-processing-status-queue --attribute-names All
+awslocal s3 ls s3://video-processing-bucket --recursive
+awslocal sns list-subscriptions-by-topic --topic-arn arn:aws:sns:us-east-1:000000000000:notification-topic
+```
+
+Alternativa com interface gráfica: instale as extensões **AWS Toolkit** (`AmazonWebServices.aws-toolkit-vscode`, ≥3.74) e **LocalStack** no VS Code — o wizard da extensão LocalStack cria um profile `localstack` em `~/.aws/config` apontando para o endpoint local; selecione `profile:localstack` no AWS Explorer para navegar pelos recursos visualmente. Pode ignorar erros de serviços não habilitados aqui (Lambda, API Gateway, ECR) na árvore do Explorer — só S3/DynamoDB/SQS/SNS importam para este repositório.
+
 ### Testando o fluxo manualmente
 
 ```bash

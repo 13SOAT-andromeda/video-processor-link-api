@@ -5,7 +5,7 @@ services:
     ports:
       - "4566:4566"
     environment:
-      - SERVICES=dynamodb,s3,sqs,sns
+      - SERVICES=dynamodb,s3,sqs,sns,sts,iam
       - DEBUG=0
     volumes:
       - "./init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh"
