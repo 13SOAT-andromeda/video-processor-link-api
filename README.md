@@ -1,6 +1,6 @@
 # links-service
 
-API HTTP do domínio de **links** do Tech Challenge FIAP X (Fase 5 — Hackathon, 13SOAT). Fonte única da verdade do domínio (ADR-007): cria o link, gera a presigned URL de upload, aplica a máquina de estados, persiste em DynamoDB (`Links`/`LinkEvents` com TTL nativo de 3 dias), consome continuamente a `video-processing-status-queue` e publica no `notification-topic` quando o processamento falha (ADR-008).
+API HTTP do domínio de **links** do Tech Challenge FIAP X (Fase 5 — Hackathon, 13SOAT). Cria o link, gera a presigned URL de upload, aplica a máquina de estados, persiste em DynamoDB (`Links`/`LinkEvents` com TTL nativo de 3 dias), consome continuamente a `video-processing-status-queue` e publica no `notification-topic` quando o processamento falha.
 
 Repositório correspondente na organização: [`video-processor-link-api`](https://github.com/13SOAT-andromeda/video-processor-link-api).
 
@@ -18,7 +18,7 @@ Este é **só um dos microsserviços** da arquitetura descrita em `arquitetura-v
 | `video-processor-authorizer` / `video-processor-authentication-api` | Login (Lambda) + validação de JWT (Lambda) | Fora do escopo deste serviço — aqui o JWT é só **validado** (mesmo segredo `jwt-signing-key`), nunca emitido |
 | `video-processor-users-api` | Perfil de usuário (RDS) | Consultado via `GET /users/:id` para resolver e-mail/nome na notificação de falha (ver §7) |
 
-Este serviço roda como **pod no EKS** (não Lambda) — ver ADR-011/ADR-001 do doc de arquitetura: precisa de pool de conexão estável e, principalmente, de uma goroutine de consumer SQS contínuo, o que o modelo de invocação por evento do Lambda não atende bem.
+Este serviço roda como **pod no EKS** (não Lambda): precisa de pool de conexão estável e, principalmente, de uma goroutine de consumer SQS contínuo, o que o modelo de invocação por evento do Lambda não atende bem.
 
 ```mermaid
 flowchart LR
@@ -50,7 +50,7 @@ flowchart LR
 
 Dois componentes da plataforma real ainda não existem/estão fora do escopo deste repositório — o serviço já implementa o contrato real contra eles, mas roda em modo simulado até ficarem disponíveis:
 
-- **`users-api`** — resolução de e-mail/nome na notificação usa um mock determinístico (`USE_USER_SVC_MOCK=true`, padrão). O client HTTP real (`GET /users/:id`, dono do recurso ou `administrator` — ADR-012) já está implementado em [`internal/adapters/users/client.go`](internal/adapters/users/client.go): ele assina um **service token JWT (HS256)** com o mesmo segredo compartilhado `jwt-signing-key`, já que o consumer da fila não tem um JWT de usuário para anexar. Basta `USE_USER_SVC_MOCK=false` + `USERS_BASE_URL` quando a svc estiver no ar.
+- **`users-api`** — resolução de e-mail/nome na notificação usa um mock determinístico (`USE_USER_SVC_MOCK=true`, padrão). O client HTTP real (`GET /users/:id`, dono do recurso ou `administrator`) já está implementado em [`internal/adapters/users/client.go`](internal/adapters/users/client.go): ele assina um **service token JWT (HS256)** com o mesmo segredo compartilhado `jwt-signing-key`, já que o consumer da fila não tem um JWT de usuário para anexar. Basta `USE_USER_SVC_MOCK=false` + `USERS_BASE_URL` quando a svc estiver no ar.
 - **`video-processor-authorizer` (Lambda)** — um middleware JWT local (HS256, [`internal/adapters/httpapi/middleware.go`](internal/adapters/httpapi/middleware.go)) simula o comportamento do authorizer real: valida o token e injeta `userId`/`role` no contexto da requisição.
 
 ---
@@ -84,7 +84,7 @@ eventType   string   -- LINK_CREATED | UPLOAD_CALLBACK | STATUS_QUEUE
 metadata    map      (nullable — ex.: {"reason": "max_retries_exceeded"})
 ```
 
-Toda escrita nas duas tabelas acontece na mesma operação de serviço — o `links-service` é o único escritor de ambas (ADR-007), com optimistic locking (`Update` condicionado ao status esperado) para a entrega *at-least-once* do SQS.
+Toda escrita nas duas tabelas acontece na mesma operação de serviço — o `links-service` é o único escritor de ambas, com optimistic locking (`Update` condicionado ao status esperado) para a entrega *at-least-once* do SQS.
 
 Nomes reais provisionados em produção pelo `iac-video-processor-data`: `video-processor-links-db-prod` / `video-processor-link-events-db-prod` / bucket `video-processor-videos-andromeda-prod` (ver §8, variáveis de ambiente).
 
@@ -134,9 +134,9 @@ internal/adapters/
   httpapi               Gin handlers + middleware JWT (simula o authorizer)
   dynamo                repositório Links/LinkEvents
   storage               presigned PUT/GET do S3
-  queue                 consumer SQS (long polling, sem DLQ própria — ADR-003)
-  notification          publisher SNS (contrato ADR-008) + noop
-  users                 mock do users-api + client HTTP do contrato real (ADR-012)
+  queue                 consumer SQS (long polling, sem DLQ própria)
+  notification          publisher SNS (contrato) + noop
+  users                 mock do users-api + client HTTP do contrato real
 internal/config         carrega tudo de variáveis de ambiente
 deploy/localstack        docker-compose + bootstrap de recursos (dev local)
 ```
@@ -335,4 +335,4 @@ kubectl delete -k k8s/overlays/aws-loadbalancer-test   # não esquecer de derrub
 
 - **`users-api` mock**: enquanto `USE_USER_SVC_MOCK=true`, qualquer `userId` resolve para um usuário determinístico fictício — não valida o comportamento real de erro (404, timeout) do client HTTP.
 - **Sem manifests K8s**: deploy real no EKS ainda depende de criar `k8s/base` (Deployment/Service/HPA) neste repositório — inclusive para wire o `DD_AGENT_HOST` real via Downward API (ver §9).
-- **Notificação é melhor-esforço**: falha ao resolver usuário ou publicar no SNS nunca bloqueia a transição de status (já persistida antes) — só loga (ADR-008).
+- **Notificação é melhor-esforço**: falha ao resolver usuário ou publicar no SNS nunca bloqueia a transição de status (já persistida antes) — só loga.
