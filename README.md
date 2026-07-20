@@ -16,7 +16,7 @@ Este é **só um dos microsserviços** da arquitetura descrita em `arquitetura-v
 | [`iac-video-processor-infra`](https://github.com/13SOAT-andromeda/iac-video-processor-infra) | VPC, EKS, ECR, filas/tópicos SNS/SQS, Ingress centralizado | Provisiona a `video-processing-status-queue`, o repositório ECR `video-processor-link-api` e o path `/links` no Ingress |
 | [`iac-video-processor-gateway`](https://github.com/13SOAT-andromeda/iac-video-processor-gateway) | API Gateway HTTP API + REQUEST authorizer | Expõe `ANY /links` e `ANY /links/{proxy+}` atrás do authorizer, roteando via VPC Link para o pod deste serviço |
 | `video-processor-authorizer` / `video-processor-authentication-api` | Login (Lambda) + validação de JWT (Lambda) | Fora do escopo deste serviço — aqui o JWT é só **validado** (mesmo segredo `jwt-signing-key`), nunca emitido |
-| `video-processor-users-api` | Perfil de usuário (RDS) | Consultado via `GET /users/:id` para resolver e-mail/nome na notificação de falha (ver §7) |
+| `video-processor-users-api` | Perfil de usuário (RDS) | Consultado via `GET /api/users/:id` (chamada direta ao pod, sem passar pelo Gateway) para resolver e-mail/nome na notificação de falha (ver §7) |
 
 Este serviço roda como **pod no EKS** (não Lambda): precisa de pool de conexão estável e, principalmente, de uma goroutine de consumer SQS contínuo, o que o modelo de invocação por evento do Lambda não atende bem.
 
@@ -109,15 +109,19 @@ Definida em [`internal/domain/link/status.go`](internal/domain/link/status.go), 
 
 Autenticação: `Authorization: Bearer <jwt>` em todas as rotas.
 
-| Método | Rota | Autorização |
-|---|---|---|
-| `POST` | `/links` | qualquer usuário autenticado |
-| `GET` | `/links` | `administrator` |
-| `GET` | `/links/user/:id` | dono do recurso (`:id == userId` do JWT) ou `administrator` |
-| `GET` | `/links/:id` | dono ou `administrator` |
-| `GET` | `/links/:id/events` | dono ou `administrator` |
-| `PUT` | `/links/:id/upload` | dono ou `administrator` |
-| `GET` | `/links/:id/download` | dono ou `administrator` (exige status `PROCESSING_COMPLETED`) |
+**Nota sobre o prefixo `/api`:** o Gin registra as rotas em `/api/links/...` — mesma convenção usada pelo `users-api` para `/api/users`. O `iac-video-processor-gateway` expõe o path **público** sem esse prefixo (`/links`, o que o cliente chama) e reescreve o encaminhamento pro ALB/pod com `overwrite:path = "/api$request.path"`. Rodando local (`make run`, sem Gateway na frente), use `/api/links` diretamente nos curls/Postman.
+
+| Método | Rota (pod) | Rota pública (via Gateway) | Autorização |
+|---|---|---|---|
+| `POST` | `/api/links` | `/links` | qualquer usuário autenticado |
+| `GET` | `/api/links` | `/links` | `administrator` |
+| `GET` | `/api/links/user/:id` | `/links/user/:id` | dono do recurso (`:id == userId` do JWT) ou `administrator` |
+| `GET` | `/api/links/:id` | `/links/:id` | dono ou `administrator` |
+| `GET` | `/api/links/:id/events` | `/links/:id/events` | dono ou `administrator` |
+| `PUT` | `/api/links/:id/upload` | `/links/:id/upload` | dono ou `administrator` |
+| `GET` | `/api/links/:id/download` | `/links/:id/download` | dono ou `administrator` (exige status `PROCESSING_COMPLETED`) |
+
+`GET /healthz` fica **sem** prefixo (endpoint operacional, não passa pelo Gateway — usado direto pelas probes do Kubernetes).
 
 Erros: `400 INVALID_REQUEST` (payload malformado), `400 INVALID_FILE_SIZE` (>200MB), `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 LINK_NOT_FOUND`, `409 INVALID_STATUS_TRANSITION`, `500 INTERNAL_ERROR`.
 
@@ -195,12 +199,14 @@ Alternativa com interface gráfica: instale as extensões **AWS Toolkit** (`Amaz
 
 ### Testando o fluxo manualmente
 
+Rodando direto (sem o Gateway na frente), use `/api/links` — é o path real que o Gin registra (ver §5).
+
 ```bash
 TOKEN=$(make -s token)          # JWT de user (u-123)
 ADMIN=$(make -s token-admin)    # JWT de administrator
 
 # 1. criar link -> devolve linkId + presigned PUT
-curl -s -X POST localhost:8080/links \
+curl -s -X POST localhost:8080/api/links \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"fileName":"video.mp4","fileSize":1048576,"isPrivate":false}'
 
@@ -209,7 +215,7 @@ curl -s -X POST localhost:8080/links \
 curl -X PUT "<uploadUrl>" --data-binary @algum-arquivo.mp4
 
 # 3. callback pós-upload -> UPLOAD_COMPLETED -> PROCESSING_PENDING
-curl -s -X PUT localhost:8080/links/<linkId>/upload -H "Authorization: Bearer $TOKEN"
+curl -s -X PUT localhost:8080/api/links/<linkId>/upload -H "Authorization: Bearer $TOKEN"
 
 # 4. simular o processing-worker publicando na status-queue
 make simulate-worker LINK=<linkId> EVENT=PROCESSING_STARTED
@@ -218,10 +224,10 @@ make simulate-worker LINK=<linkId> EVENT=PROCESSING_COMPLETED KEY='<linkId>/proc
 make simulate-worker LINK=<linkId> EVENT=PROCESSING_FAILED REASON=max_retries_exceeded
 
 # 5. consultar
-curl -s localhost:8080/links/<linkId>          -H "Authorization: Bearer $TOKEN"
-curl -s localhost:8080/links/<linkId>/events   -H "Authorization: Bearer $TOKEN"
-curl -s localhost:8080/links/<linkId>/download -H "Authorization: Bearer $TOKEN"
-curl -s localhost:8080/links                   -H "Authorization: Bearer $ADMIN"
+curl -s localhost:8080/api/links/<linkId>          -H "Authorization: Bearer $TOKEN"
+curl -s localhost:8080/api/links/<linkId>/events   -H "Authorization: Bearer $TOKEN"
+curl -s localhost:8080/api/links/<linkId>/download -H "Authorization: Bearer $TOKEN"
+curl -s localhost:8080/api/links                   -H "Authorization: Bearer $ADMIN"
 ```
 
 Para confirmar que a notificação SNS foi mesmo publicada (não há consumidor real no LocalStack sem uma subscription manual), inspecione o log do container:

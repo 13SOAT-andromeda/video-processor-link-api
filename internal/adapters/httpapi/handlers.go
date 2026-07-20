@@ -30,7 +30,11 @@ func Router(svc *app.Service, jwtSecret, ddServiceName string) *gin.Engine {
 
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 
-	auth := r.Group("/", AuthMiddleware(jwtSecret))
+	// Prefixo /api: mesma convenção usada pelo iac-video-processor-gateway
+	// pro /users (rota pública do cliente fica sem prefixo, ex. GET /links,
+	// mas o Gateway reescreve o encaminhamento pro ALB com
+	// overwrite:path = "/api$request.path" antes de chegar aqui).
+	auth := r.Group("/api", AuthMiddleware(jwtSecret))
 	{
 		auth.POST("/links", h.CreateLink)
 		auth.GET("/links", RequireRole("administrator"), h.ListAll)

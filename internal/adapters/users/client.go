@@ -2,7 +2,7 @@
 //
 // A svc de Users ainda não está no ar — MockClient responde qualquer userId
 // com um usuário determinístico. HTTPClient implementa o contrato real do
-// video-processor-users-api (GET /users/:id — dono do recurso OU
+// video-processor-users-api (GET /api/users/:id — dono do recurso OU
 // administrator, ADR-012): como o consumer da status-queue não tem JWT de
 // usuário, o client assina um service token próprio (HS256, mesmo segredo
 // compartilhado jwt-signing-key da plataforma) com role administrator.
@@ -94,7 +94,11 @@ type userResponse struct {
 }
 
 func (c *HTTPClient) GetUser(ctx context.Context, userID string) (*app.User, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/users/"+userID, nil)
+	// /api/users, não /users: essa chamada vai direto pro pod (Service
+	// interno do cluster), sem passar pelo Gateway — então precisa da rota
+	// real do users-api, não da rota pública sem prefixo que o Gateway expõe
+	// (ver nota equivalente em httpapi.Router sobre a convenção /api).
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/users/"+userID, nil)
 	if err != nil {
 		return nil, err
 	}
