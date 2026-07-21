@@ -21,9 +21,9 @@ func main() {
 
 	cfg := config.Load()
 	claims := httpapi.Claims{
-		UserID: *userID,
-		Role:   *role,
+		Role: *role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   *userID,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)), // 1h, como na spec §7
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
