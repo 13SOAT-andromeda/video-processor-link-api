@@ -86,7 +86,7 @@ metadata    map      (nullable — ex.: {"reason": "max_retries_exceeded"})
 
 Toda escrita nas duas tabelas acontece na mesma operação de serviço — o `links-service` é o único escritor de ambas, com optimistic locking (`Update` condicionado ao status esperado) para a entrega *at-least-once* do SQS.
 
-Nomes reais provisionados em produção: `video-processor-links-db-prod` / `video-processor-link-events-db-prod` (`iac-video-processor-data`) e bucket `video-processor-bucket-prod` (`iac-video-processor-infra`, compartilhado com o processing-worker — ver §8, variáveis de ambiente).
+Nomes reais provisionados em produção: `video-processor-links-db-prod` / `video-processor-link-events-db-prod` (`iac-video-processor-data`) e bucket `video-processor-bucket-prod-<account_id>` (`iac-video-processor-infra`, compartilhado com o processing-worker — o account_id no nome evita colisão global de bucket S3 entre contas do AWS Academy Lab; ver §8, variáveis de ambiente).
 
 ---
 
@@ -234,7 +234,7 @@ Ver [`.env.example`](.env.example) para o arquivo completo. Resumo:
 | `AWS_ENDPOINT_URL` | `http://localhost:4566` | **vazio** (usa a AWS real) |
 | `DYNAMO_LINKS_TABLE` | `Links` | `video-processor-links-db-prod` |
 | `DYNAMO_EVENTS_TABLE` | `LinkEvents` | `video-processor-link-events-db-prod` |
-| `S3_BUCKET` | `video-processing-bucket` | `video-processor-bucket-prod` |
+| `S3_BUCKET` | `video-processing-bucket` | `video-processor-bucket-prod-<account_id>` (output `video_processor_bucket_name` do `iac-video-processor-infra`) |
 | `STATUS_QUEUE_URL` | criada pelo bootstrap local | output `video_processing_status_queue_url` do `iac-video-processor-infra` |
 | `NOTIFICATION_TOPIC_ARN` | criada pelo bootstrap local | output `notification_events_topic_arn` do `iac-video-processor-infra` (o template `PROCESSING_FAILED` precisa estar cadastrado no `notification-service`) |
 | `USE_USER_SVC_MOCK` | `true` | `false` quando `users-api` estiver no ar |
