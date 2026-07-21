@@ -30,7 +30,12 @@ func Router(svc *app.Service, jwtSecret, ddServiceName string) *gin.Engine {
 
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 
-	auth := r.Group("/", AuthMiddleware(jwtSecret))
+	// Grupo /api: o API Gateway reescreve o path recebido (/links/...) para
+	// /api$request.path antes de encaminhar pro ALB (mesma convenção do
+	// /users -> /api/users) — sem esse prefixo aqui, todo request forwarded
+	// pelo gateway bateria 404 no Gin.
+	api := r.Group("/api")
+	auth := api.Group("/", AuthMiddleware(jwtSecret))
 	{
 		auth.POST("/links", h.CreateLink)
 		auth.GET("/links", RequireRole("administrator"), h.ListAll)

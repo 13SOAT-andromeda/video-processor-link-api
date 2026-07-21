@@ -1,0 +1,73 @@
+# STATUS_QUEUE_URL e NOTIFICATION_TOPIC_ARN não entram aqui: contêm o account
+# ID da sessão AWS Academy Lab (muda a cada reset), então são setados via
+# `kubectl set env deployment/video-processor-link-api ...` depois do apply
+# do iac-video-processor-infra — mesmo padrão já usado pro SQS_QUEUE_URL do
+# users-api-worker (ver RUNBOOK.md). JWT_SECRET vem do secret link-api-secrets
+# (asm-exec resolvendo jwt-signing-key do Secrets Manager — nunca em texto puro).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: video-processor-link-api
+  namespace: default
+  labels:
+    app: video-processor-link-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: video-processor-link-api
+  template:
+    metadata:
+      labels:
+        app: video-processor-link-api
+    spec:
+      containers:
+        - name: link-api
+          image: video-processor-link-api:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DYNAMO_LINKS_TABLE
+              value: video-processor-links-db-prod
+            - name: DYNAMO_EVENTS_TABLE
+              value: video-processor-link-events-db-prod
+            - name: S3_BUCKET
+              value: video-processor-bucket-prod
+            - name: USE_USER_SVC_MOCK
+              value: "false"
+            - name: USERS_BASE_URL
+              value: http://video-processor-users-api-svc.default.svc.cluster.local
+            - name: DD_SERVICE
+              value: video-processor-link-api
+            - name: DD_ENV
+              value: prod
+            - name: DD_VERSION
+              value: latest
+            - name: DD_AGENT_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - secretRef:
+                name: aws-session-credentials
+            - secretRef:
+                name: link-api-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
