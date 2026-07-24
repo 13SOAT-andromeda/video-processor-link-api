@@ -1,0 +1,27 @@
+# Variante de TESTE do overlay aws/ — troca o Service de ClusterIP pra
+# LoadBalancer, criando um ELB clássico com DNS público de verdade.
+#
+# Uso: só pra testar o pod direto na AWS real, contornando API Gateway/ALB
+# unificado/authorizer (que ainda não aplicam — faltam as Lambdas de
+# authorizer/authentication). Não é como o serviço roda de verdade em
+# produção (lá o Service continua ClusterIP, atrás do Ingress) — por isso
+# fica separado do overlays/aws/ normal, em vez de misturado nele.
+#
+# Custa um recurso AWS a mais (ELB) enquanto existir — lembrar de:
+#   kubectl delete -k k8s/overlays/aws-loadbalancer-test
+# ou trocar de volta pra type: ClusterIP quando terminar de testar.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../aws
+
+patches:
+  - target:
+      kind: Service
+      name: video-processor-link-api-svc
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: LoadBalancer

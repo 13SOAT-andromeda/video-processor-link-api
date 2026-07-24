@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: default
+
+resources:
+  - ../../base
+  - ingress-nginx.yaml
+  - config.yaml
+  - localstack.yaml
+  - ingress.yaml
+
+# Reaproveita o script de bootstrap real (não duplica) — mesmo arquivo usado
+# pelo docker-compose.yml em deploy/localstack/.
+configMapGenerator:
+  - name: localstack-init
+    files:
+      - init-aws.sh=../../../deploy/localstack/init-aws.sh
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+patches:
+  - target:
+      kind: Deployment
+      name: video-processor-link-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: video-processor-link-api:latest
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+      - op: remove
+        path: /spec/template/spec/containers/0/env
+      - op: replace
+        path: /spec/template/spec/containers/0/envFrom
+        value:
+          - configMapRef:
+              name: link-api-config
+          - secretRef:
+              name: link-api-secrets
