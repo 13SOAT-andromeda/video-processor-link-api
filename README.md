@@ -12,8 +12,8 @@ Este é **só um dos microsserviços** da arquitetura descrita em `arquitetura-v
 
 | Repositório | Responsabilidade | Relação com este serviço |
 |---|---|---|
-| [`iac-video-processor-data`](https://github.com/13SOAT-andromeda/iac-video-processor-data) | RDS (users) + DynamoDB (`auth-credentials`, `Links`, `LinkEvents`) + bucket S3 de vídeos | Provisiona as duas tabelas e o bucket que este serviço usa |
-| [`iac-video-processor-infra`](https://github.com/13SOAT-andromeda/iac-video-processor-infra) | VPC, EKS, ECR, filas/tópicos SNS/SQS, Ingress centralizado | Provisiona a `video-processing-status-queue`, o repositório ECR `video-processor-link-api` e o path `/links` no Ingress |
+| [`iac-video-processor-data`](https://github.com/13SOAT-andromeda/iac-video-processor-data) | RDS (users) + DynamoDB (`auth-credentials`, `Links`, `LinkEvents`) | Provisiona as duas tabelas que este serviço usa |
+| [`iac-video-processor-infra`](https://github.com/13SOAT-andromeda/iac-video-processor-infra) | VPC, EKS, ECR, filas/tópicos SNS/SQS, bucket S3 de vídeos, Ingress centralizado | Provisiona o bucket de vídeos (compartilhado com o processing-worker), a `video-processing-status-queue`, o repositório ECR `video-processor-link-api` e o path `/links` no Ingress |
 | [`iac-video-processor-gateway`](https://github.com/13SOAT-andromeda/iac-video-processor-gateway) | API Gateway HTTP API + REQUEST authorizer | Expõe `ANY /links` e `ANY /links/{proxy+}` atrás do authorizer, roteando via VPC Link para o pod deste serviço |
 | `video-processor-authorizer` / `video-processor-authentication-api` | Login (Lambda) + validação de JWT (Lambda) | Fora do escopo deste serviço — aqui o JWT é só **validado** (mesmo segredo `jwt-signing-key`), nunca emitido |
 | `video-processor-users-api` | Perfil de usuário (RDS) | Consultado via `GET /users/:id` para resolver e-mail/nome na notificação de falha (ver §7) |
@@ -86,7 +86,7 @@ metadata    map      (nullable — ex.: {"reason": "max_retries_exceeded"})
 
 Toda escrita nas duas tabelas acontece na mesma operação de serviço — o `links-service` é o único escritor de ambas, com optimistic locking (`Update` condicionado ao status esperado) para a entrega *at-least-once* do SQS.
 
-Nomes reais provisionados em produção pelo `iac-video-processor-data`: `video-processor-links-db-prod` / `video-processor-link-events-db-prod` / bucket `video-processor-videos-andromeda-prod` (ver §8, variáveis de ambiente).
+Nomes reais provisionados em produção: `video-processor-links-db-prod` / `video-processor-link-events-db-prod` (`iac-video-processor-data`) e bucket `video-processor-bucket-prod-<account_id>` (`iac-video-processor-infra`, compartilhado com o processing-worker — o account_id no nome evita colisão global de bucket S3 entre contas do AWS Academy Lab; ver §8, variáveis de ambiente).
 
 ---
 
@@ -184,7 +184,7 @@ TOKEN=$(make -s token)          # JWT de user (u-123)
 ADMIN=$(make -s token-admin)    # JWT de administrator
 
 # 1. criar link -> devolve linkId + presigned PUT
-curl -s -X POST localhost:8080/links \
+curl -s -X POST localhost:8080/api/links \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"fileName":"video.mp4","fileSize":1048576,"isPrivate":false}'
 
@@ -193,7 +193,7 @@ curl -s -X POST localhost:8080/links \
 curl -X PUT "<uploadUrl>" --data-binary @algum-arquivo.mp4
 
 # 3. callback pós-upload -> UPLOAD_COMPLETED -> PROCESSING_PENDING
-curl -s -X PUT localhost:8080/links/<linkId>/upload -H "Authorization: Bearer $TOKEN"
+curl -s -X PUT localhost:8080/api/links/<linkId>/upload -H "Authorization: Bearer $TOKEN"
 
 # 4. simular o processing-worker publicando na status-queue
 make simulate-worker LINK=<linkId> EVENT=PROCESSING_STARTED
@@ -202,10 +202,10 @@ make simulate-worker LINK=<linkId> EVENT=PROCESSING_COMPLETED KEY='<linkId>/proc
 make simulate-worker LINK=<linkId> EVENT=PROCESSING_FAILED REASON=max_retries_exceeded
 
 # 5. consultar
-curl -s localhost:8080/links/<linkId>          -H "Authorization: Bearer $TOKEN"
-curl -s localhost:8080/links/<linkId>/events   -H "Authorization: Bearer $TOKEN"
-curl -s localhost:8080/links/<linkId>/download -H "Authorization: Bearer $TOKEN"
-curl -s localhost:8080/links                   -H "Authorization: Bearer $ADMIN"
+curl -s localhost:8080/api/links/<linkId>          -H "Authorization: Bearer $TOKEN"
+curl -s localhost:8080/api/links/<linkId>/events   -H "Authorization: Bearer $TOKEN"
+curl -s localhost:8080/api/links/<linkId>/download -H "Authorization: Bearer $TOKEN"
+curl -s localhost:8080/api/links                   -H "Authorization: Bearer $ADMIN"
 ```
 
 Para confirmar que a notificação SNS foi mesmo publicada (não há consumidor real no LocalStack sem uma subscription manual), inspecione o log do container:
@@ -234,7 +234,7 @@ Ver [`.env.example`](.env.example) para o arquivo completo. Resumo:
 | `AWS_ENDPOINT_URL` | `http://localhost:4566` | **vazio** (usa a AWS real) |
 | `DYNAMO_LINKS_TABLE` | `Links` | `video-processor-links-db-prod` |
 | `DYNAMO_EVENTS_TABLE` | `LinkEvents` | `video-processor-link-events-db-prod` |
-| `S3_BUCKET` | `video-processing-bucket` | `video-processor-videos-andromeda-prod` |
+| `S3_BUCKET` | `video-processing-bucket` | `video-processor-bucket-prod-<account_id>` (output `video_processor_bucket_name` do `iac-video-processor-infra`) |
 | `STATUS_QUEUE_URL` | criada pelo bootstrap local | output `video_processing_status_queue_url` do `iac-video-processor-infra` |
 | `NOTIFICATION_TOPIC_ARN` | criada pelo bootstrap local | output `notification_events_topic_arn` do `iac-video-processor-infra` (o template `PROCESSING_FAILED` precisa estar cadastrado no `notification-service`) |
 | `USE_USER_SVC_MOCK` | `true` | `false` quando `users-api` estiver no ar |
@@ -256,7 +256,7 @@ APM via [`gopkg.in/DataDog/dd-trace-go.v1`](https://github.com/DataDog/dd-trace-
 
 **Nível infraestrutura** (`iac-video-processor-infra`): o Datadog Agent roda como Helm release (`datadog/datadog`, chart oficial) no cluster EKS — DaemonSet de node agent + Cluster Agent, coletando métricas de infraestrutura/containers, logs (autodiscovery) e recebendo os traces de APM enviados pelas aplicações via `DD_AGENT_HOST`. Ver o Terraform daquele repositório (`prod/datadog.tf`) para o detalhe — só existe em `prod/`, já que o LocalStack Community usado em `dev/` não roda um control plane Kubernetes real (mesma limitação documentada para o AWS Load Balancer Controller).
 
-**Em aberto:** como este repositório ainda não tem manifests Kubernetes (`k8s/base`, ver §11), o `DD_AGENT_HOST` do pod real (via Downward API `status.hostIP`) fica pendente de quando esses manifests forem criados — o código já está pronto para recebê-lo.
+`DD_AGENT_HOST` do pod real vem via Downward API (`status.hostIP`), wireado em `k8s/base/deployment.yaml` (ver §11).
 
 Para testar localmente com um agent de verdade (opcional, requer uma API key Datadog — nunca compartilhe a sua num arquivo versionado):
 
@@ -287,12 +287,11 @@ docker build -t video-processor-link-api .
 
 Multi-stage ([`Dockerfile`](Dockerfile)): build em `golang:1.24-alpine`, runtime em `gcr.io/distroless/static-debian12:nonroot` (sem shell, usuário não-root). Em produção, a imagem é publicada no ECR `video-processor-link-api-prod` (provisionado pelo `iac-video-processor-infra`) e deployada no EKS atrás do path `/links` do Ingress centralizado.
 
-**Em aberto:** este repositório ainda não tem manifests Kubernetes (`k8s/base`/`k8s/overlays`, no padrão usado pelo `users-api`) nem pipeline de CI/CD — só a imagem Docker e o Terraform de infra compartilhada (ECR, fila, rota do Ingress, Datadog Agent) já existem.
+`k8s/base` (Deployment + Service) e `k8s/overlays/aws` seguem o mesmo padrão usado pelo `users-api`. **Em aberto:** ainda não há pipeline de CI/CD — o build/push da imagem e o `kubectl apply -k` são manuais por enquanto.
 
 ---
 
 ## 12. Limitações conhecidas
 
 - **`users-api` mock**: enquanto `USE_USER_SVC_MOCK=true`, qualquer `userId` resolve para um usuário determinístico fictício — não valida o comportamento real de erro (404, timeout) do client HTTP.
-- **Sem manifests K8s**: deploy real no EKS ainda depende de criar `k8s/base` (Deployment/Service/HPA) neste repositório — inclusive para wire o `DD_AGENT_HOST` real via Downward API (ver §9).
 - **Notificação é melhor-esforço**: falha ao resolver usuário ou publicar no SNS nunca bloqueia a transição de status (já persistida antes) — só loga.

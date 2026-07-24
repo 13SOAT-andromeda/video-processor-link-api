@@ -72,10 +72,10 @@ func (c *HTTPClient) serviceToken() (string, error) {
 	}
 	exp := time.Now().Add(15 * time.Minute)
 	claims := jwt.MapClaims{
-		"userId": "links-service",
-		"role":   "administrator",
-		"iat":    time.Now().Unix(),
-		"exp":    exp.Unix(),
+		"sub":  "links-service",
+		"role": "administrator",
+		"iat":  time.Now().Unix(),
+		"exp":  exp.Unix(),
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(c.jwtSecret)
 	if err != nil {

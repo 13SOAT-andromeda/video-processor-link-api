@@ -9,9 +9,11 @@ import (
 )
 
 // Claims espelha o que o Lambda authorizer injetaria no context (spec §7).
+// O user id vem do claim padrão "sub" (jwt.RegisteredClaims.Subject) --
+// mesmo claim usado pela authentication-api/authorizer reais e pelo
+// users-api (pkgjwt.Claims.Subject), não um campo "userId" customizado.
 type Claims struct {
-	UserID string `json:"userId"`
-	Role   string `json:"role"` // administrator | user
+	Role string `json:"role"` // administrator | user
 	jwt.RegisteredClaims
 }
 
@@ -32,11 +34,11 @@ func AuthMiddleware(secret string) gin.HandlerFunc {
 			}
 			return []byte(secret), nil
 		})
-		if err != nil || !token.Valid || claims.UserID == "" {
+		if err != nil || !token.Valid || claims.Subject == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "UNAUTHORIZED"})
 			return
 		}
-		c.Set("userId", claims.UserID)
+		c.Set("userId", claims.Subject)
 		c.Set("role", claims.Role)
 		c.Next()
 	}
