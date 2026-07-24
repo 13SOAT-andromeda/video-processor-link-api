@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: link-api-config
+data:
+  PORT: "8080"
+  BASE_URL: "http://localhost"
+  AWS_ENDPOINT_URL: "http://localstack-svc:4566"
+  AWS_REGION: "us-east-1"
+  AWS_ACCESS_KEY_ID: "test"
+  DYNAMO_LINKS_TABLE: "Links"
+  DYNAMO_EVENTS_TABLE: "LinkEvents"
+  S3_BUCKET: "video-processing-bucket"
+  STATUS_QUEUE_URL: "http://localstack-svc:4566/000000000000/video-processing-status-queue"
+  NOTIFICATION_TOPIC_ARN: "arn:aws:sns:us-east-1:000000000000:notification-topic"
+  USE_USER_SVC_MOCK: "true"
+  USERS_BASE_URL: "http://video-processor-users-api-svc.default.svc.cluster.local"
+  DD_ENV: "local"
+  DD_SERVICE: "video-processor-link-api"
+  DD_VERSION: "local"
+  # DD_AGENT_HOST fica de fora de propósito — sem Datadog Agent neste
+  # cluster local isolado (o agent real é instalado uma vez, pro cluster
+  # inteiro, pelo iac-video-processor-infra). Vazio = tracer desligado
+  # (mesmo padrão já usado pelas outras vars "vazio = desligado").
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: link-api-secrets
+type: Opaque
+stringData:
+  JWT_SECRET: "dev-secret-change-me"
+  AWS_SECRET_ACCESS_KEY: "test"

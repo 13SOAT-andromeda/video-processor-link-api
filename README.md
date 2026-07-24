@@ -214,6 +214,22 @@ Para confirmar que a notificação SNS foi mesmo publicada (não há consumidor 
 docker logs links-localstack | grep "sns.Publish"   # deve mostrar "=> 200" após um PROCESSING_FAILED
 ```
 
+### Inspecionando os recursos manualmente
+
+`sts`/`iam` também estão habilitados na lista de `SERVICES` do [`docker-compose.yml`](deploy/localstack/docker-compose.yml) — não são usados pelo `links-service` em si, mas ferramentas de inspeção (AWS CLI, extensão **AWS Toolkit** do VS Code) chamam `sts:GetCallerIdentity` para validar a conexão antes de listar qualquer recurso; sem eles, a conexão falha com `Service 'sts' is not enabled`.
+
+Com `AWS_ACCESS_KEY_ID=test`, `AWS_SECRET_ACCESS_KEY=test` e `AWS_DEFAULT_REGION=us-east-1` exportadas, use `awslocal` (wrapper do `aws` CLI que já injeta `--endpoint-url=http://localhost:4566`):
+
+```bash
+awslocal dynamodb scan --table-name Links
+awslocal dynamodb scan --table-name LinkEvents
+awslocal sqs get-queue-attributes --queue-url http://localhost:4566/000000000000/video-processing-status-queue --attribute-names All
+awslocal s3 ls s3://video-processing-bucket --recursive
+awslocal sns list-subscriptions-by-topic --topic-arn arn:aws:sns:us-east-1:000000000000:notification-topic
+```
+
+Alternativa com interface gráfica: instale as extensões **AWS Toolkit** (`AmazonWebServices.aws-toolkit-vscode`, ≥3.74) e **LocalStack** no VS Code — o wizard da extensão LocalStack cria um profile `localstack` em `~/.aws/config` apontando para o endpoint local; selecione `profile:localstack` no AWS Explorer para navegar pelos recursos visualmente. Pode ignorar erros de serviços não habilitados aqui (Lambda, API Gateway, ECR) na árvore do Explorer — só S3/DynamoDB/SQS/SNS importam para este repositório.
+
 ### Encerrando
 
 ```bash
@@ -287,7 +303,19 @@ docker build -t video-processor-link-api .
 
 Multi-stage ([`Dockerfile`](Dockerfile)): build em `golang:1.24-alpine`, runtime em `gcr.io/distroless/static-debian12:nonroot` (sem shell, usuário não-root). Em produção, a imagem é publicada no ECR `video-processor-link-api-prod` (provisionado pelo `iac-video-processor-infra`) e deployada no EKS atrás do path `/links` do Ingress centralizado.
 
-`k8s/base` (Deployment + Service) e `k8s/overlays/aws` seguem o mesmo padrão usado pelo `users-api`. **Em aberto:** ainda não há pipeline de CI/CD — o build/push da imagem e o `kubectl apply -k` são manuais por enquanto.
+`k8s/base` (Deployment + Service + HPA) e `k8s/overlays/aws` seguem o mesmo padrão usado pelo `users-api`. **Em aberto:** ainda não há pipeline de CI/CD — o build/push da imagem e o `kubectl apply -k` são manuais por enquanto.
+
+Overlays disponíveis:
+
+- `k8s/overlays/local` — cluster [`kind`](https://kind.sigs.k8s.io/) self-contido para testar os manifests sem depender da AWS: sobe LocalStack *in-cluster* (reaproveita o `init-aws.sh` via `configMapGenerator`) e ingress-nginx vendorizado. Uso:
+  ```bash
+  kind create cluster --config k8s/kind-config.yaml
+  docker build -t video-processor-link-api:latest .
+  kind load docker-image video-processor-link-api:latest
+  kubectl apply --load-restrictor LoadRestrictionsNone -k k8s/overlays/local
+  ```
+- `k8s/overlays/aws` — deploy real no EKS; sem Ingress próprio (centralizado no `iac-video-processor-infra`, cobrindo `/users` e `/links` no mesmo ALB) e sem credenciais AWS estáticas (pod usa a IAM role do node/o secret `aws-session-credentials`).
+- `k8s/overlays/aws-loadbalancer-test` — variante descartável do overlay `aws`, só pra teste manual direto no pod (`Service` tipo `LoadBalancer`), contornando API Gateway/authorizer. Custa um ELB a mais enquanto existir — `kubectl delete -k k8s/overlays/aws-loadbalancer-test` ao terminar.
 
 ---
 
