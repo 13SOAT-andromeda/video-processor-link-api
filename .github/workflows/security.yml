@@ -16,10 +16,19 @@ jobs:
       - name: Check Build
         run: go build ./...
 
+      # gosec/govulncheck vivem num módulo Go isolado (tools/go.mod), com
+      # go.sum próprio pinando versão exata + checksum — não altera o
+      # go.mod raiz (fica em 1.24, igual ao Dockerfile de produção). Rodar
+      # `go install <pkg>` sem @versão AQUI DENTRO do módulo resolve pelo
+      # go.sum local (lock-file), não busca "latest" no proxy a cada run.
+      # tools/go.mod exige go>=1.25 — o toolchain switching automático do Go
+      # (GOTOOLCHAIN=auto, padrão) baixa 1.25.x só pra este passo, sem afetar
+      # o build/test do módulo raiz logo abaixo.
       - name: Install SAST Security Tools
+        working-directory: tools
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
-          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          go install github.com/securego/gosec/v2/cmd/gosec
+          go install golang.org/x/vuln/cmd/govulncheck
           echo "$GOPATH/bin" >> $GITHUB_PATH
 
       # Executa Gosec e gera SARIF
