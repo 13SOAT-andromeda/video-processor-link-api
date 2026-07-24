@@ -36,8 +36,11 @@ jobs:
       - name: Run tests with coverage
         run: go vet ./... && go test ./... -coverprofile=coverage.out
 
+      # sonarcloud-github-action está deprecated (imagem Docker com Java 17,
+      # não suportado pelo SonarQube Cloud desde 20/07/2026) — substituído
+      # pela action oficial sonarqube-scan-action, mesma interface (args/env).
       - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@v2
+        uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
