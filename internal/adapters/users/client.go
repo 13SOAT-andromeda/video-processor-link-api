@@ -1,12 +1,11 @@
 // Package users implementa app.UsersClient.
 //
-// A svc de Users ainda não está no ar — MockClient responde qualquer userId
-// com um usuário determinístico. HTTPClient implementa o contrato real do
-// video-processor-users-api (GET /users/:id — dono do recurso OU
+// MockClient responde qualquer userId com um usuário determinístico — usado
+// só quando USE_USER_SVC_MOCK=true. HTTPClient implementa o contrato real do
+// video-processor-users-api (GET /api/users/:id — dono do recurso OU
 // administrator, ADR-012): como o consumer da status-queue não tem JWT de
 // usuário, o client assina um service token próprio (HS256, mesmo segredo
 // compartilhado jwt-signing-key da plataforma) com role administrator.
-// Basta trocar USE_USER_SVC_MOCK=false quando a svc ficar pronta.
 package users
 
 import (
@@ -94,7 +93,7 @@ type userResponse struct {
 }
 
 func (c *HTTPClient) GetUser(ctx context.Context, userID string) (*app.User, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/users/"+userID, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/users/"+userID, nil)
 	if err != nil {
 		return nil, err
 	}
