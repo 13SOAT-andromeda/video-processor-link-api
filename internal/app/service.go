@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -97,20 +98,34 @@ func (s *Service) ListEvents(ctx context.Context, linkID, requesterID, role stri
 	return s.repo.ListEvents(ctx, linkID)
 }
 
-// ConfirmUpload é o callback opcional pós-upload (PUT /links/:id/upload):
-// LINK_CREATED/UPLOAD_PENDING -> UPLOAD_COMPLETED -> PROCESSING_PENDING.
-func (s *Service) ConfirmUpload(ctx context.Context, linkID, requesterID, role string) (*link.Link, error) {
-	l, err := s.GetLink(ctx, linkID, requesterID, role)
+// ConfirmUploadFromS3Event confirma o upload a partir do evento S3
+// ObjectCreated no prefixo {linkId}/raw/ (fan-out via SNS, ver
+// video-upload-confirmation-queue): LINK_CREATED/UPLOAD_PENDING ->
+// UPLOAD_COMPLETED -> PROCESSING_PENDING. Substitui o antigo callback HTTP
+// PUT /links/:id/upload — o próprio S3 confirma a gravação do arquivo, sem
+// depender do frontend notificar o backend.
+//
+// Chamado pelo consumer da fila (não por um usuário autenticado), então não
+// há checagem de ownership. Idempotente: entrega at-least-once do SQS pode
+// repetir o mesmo evento numa transição já aplicada — mesmo padrão do
+// ApplyStatusEvent.
+func (s *Service) ConfirmUploadFromS3Event(ctx context.Context, linkID string) error {
+	l, err := s.repo.Get(ctx, linkID)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, link.ErrNotFound) {
+			s.log.Warn("S3 upload event for unknown link, dropping", "linkId", linkID)
+			return nil // nunca existirá — não adianta retentar
+		}
+		return err
 	}
-	if err := s.applyTransition(ctx, l, link.StatusUploadCompleted, "UPLOAD_CALLBACK", nil); err != nil {
-		return nil, err
+	if l.Status != link.StatusLinkCreated && l.Status != link.StatusUploadPending {
+		s.log.Info("idempotent skip: upload already confirmed", "linkId", linkID, "status", l.Status)
+		return nil
 	}
-	if err := s.applyTransition(ctx, l, link.StatusProcessingPending, "UPLOAD_CALLBACK", nil); err != nil {
-		return nil, err
+	if err := s.applyTransition(ctx, l, link.StatusUploadCompleted, "S3_UPLOAD_EVENT", nil); err != nil {
+		return err
 	}
-	return l, nil
+	return s.applyTransition(ctx, l, link.StatusProcessingPending, "S3_UPLOAD_EVENT", nil)
 }
 
 // DownloadOutput é a resposta de GET /links/:id/download.

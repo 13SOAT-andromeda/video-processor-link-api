@@ -1,12 +1,13 @@
-# STATUS_QUEUE_URL, NOTIFICATION_TOPIC_ARN e S3_BUCKET não entram aqui: os
-# dois primeiros contêm o account ID da sessão AWS Academy Lab (muda a cada
-# reset); o bucket leva o account ID no nome pelo mesmo motivo (nome de
-# bucket S3 é global — ver iac-video-processor-infra/prod/storage.tf). Todos
-# são setados via `kubectl set env deployment/video-processor-link-api ...`
-# depois do apply do iac-video-processor-infra — mesmo padrão já usado pro
-# SQS_QUEUE_URL do users-api-worker (ver RUNBOOK.md). JWT_SECRET vem do
-# secret link-api-secrets (asm-exec resolvendo jwt-signing-key do Secrets
-# Manager — nunca em texto puro).
+# STATUS_QUEUE_URL, UPLOAD_CONFIRMATION_QUEUE_URL, NOTIFICATION_TOPIC_ARN e
+# S3_BUCKET não entram aqui: os três primeiros contêm o account ID da sessão
+# AWS Academy Lab (muda a cada reset); o bucket leva o account ID no nome
+# pelo mesmo motivo (nome de bucket S3 é global — ver
+# iac-video-processor-infra/prod/storage.tf). Todos são setados via
+# `kubectl set env deployment/video-processor-link-api ...` depois do apply
+# do iac-video-processor-infra — mesmo padrão já usado pro SQS_QUEUE_URL do
+# users-api-worker (ver RUNBOOK.md). JWT_SECRET vem do secret
+# link-api-secrets (asm-exec resolvendo jwt-signing-key do Secrets Manager —
+# nunca em texto puro).
 apiVersion: apps/v1
 kind: Deployment
 metadata:

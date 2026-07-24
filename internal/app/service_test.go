@@ -130,25 +130,31 @@ func TestOwnershipEnforced(t *testing.T) {
 	assert.ErrorIs(t, err, link.ErrForbidden)
 }
 
-func TestConfirmUploadHappyPath(t *testing.T) {
-	svc, _, _ := newTestService()
+func TestConfirmUploadFromS3EventHappyPath(t *testing.T) {
+	svc, repo, _ := newTestService()
 	out, _ := svc.CreateLink(context.Background(), "u-1", "v.mp4", false)
 
-	l, err := svc.ConfirmUpload(context.Background(), out.LinkID, "u-1", "user")
+	err := svc.ConfirmUploadFromS3Event(context.Background(), out.LinkID)
 	require.NoError(t, err)
-	assert.Equal(t, link.StatusProcessingPending, l.Status)
+	assert.Equal(t, link.StatusProcessingPending, repo.links[out.LinkID].Status)
 
-	// callback repetido -> 409
-	_, err = svc.ConfirmUpload(context.Background(), out.LinkID, "u-1", "user")
-	var invalid link.ErrInvalidTransition
-	assert.ErrorAs(t, err, &invalid)
+	// evento S3 duplicado (at-least-once) -> skip idempotente, sem erro
+	err = svc.ConfirmUploadFromS3Event(context.Background(), out.LinkID)
+	assert.NoError(t, err)
+	assert.Equal(t, link.StatusProcessingPending, repo.links[out.LinkID].Status)
+}
+
+func TestConfirmUploadFromS3EventUnknownLinkDropsWithoutRetry(t *testing.T) {
+	svc, _, _ := newTestService()
+	err := svc.ConfirmUploadFromS3Event(context.Background(), "does-not-exist")
+	assert.NoError(t, err)
 }
 
 func TestProcessingFlowAndDownload(t *testing.T) {
 	svc, _, _ := newTestService()
 	ctx := context.Background()
 	out, _ := svc.CreateLink(ctx, "u-1", "v.mp4", false)
-	_, err := svc.ConfirmUpload(ctx, out.LinkID, "u-1", "user")
+	err := svc.ConfirmUploadFromS3Event(ctx, out.LinkID)
 	require.NoError(t, err)
 
 	// download antes de completar -> 409
@@ -169,7 +175,7 @@ func TestApplyStatusEventIdempotent(t *testing.T) {
 	svc, repo, _ := newTestService()
 	ctx := context.Background()
 	out, _ := svc.CreateLink(ctx, "u-1", "v.mp4", false)
-	_, _ = svc.ConfirmUpload(ctx, out.LinkID, "u-1", "user")
+	_ = svc.ConfirmUploadFromS3Event(ctx, out.LinkID)
 
 	require.NoError(t, svc.ApplyStatusEvent(ctx, StatusEvent{LinkID: out.LinkID, EventType: "PROCESSING_STARTED"}))
 	eventsBefore := len(repo.events)
@@ -183,7 +189,7 @@ func TestProcessingFailedTriggersNotification(t *testing.T) {
 	svc, _, notifier := newTestService()
 	ctx := context.Background()
 	out, _ := svc.CreateLink(ctx, "u-1", "v.mp4", false)
-	_, _ = svc.ConfirmUpload(ctx, out.LinkID, "u-1", "user")
+	_ = svc.ConfirmUploadFromS3Event(ctx, out.LinkID)
 	require.NoError(t, svc.ApplyStatusEvent(ctx, StatusEvent{LinkID: out.LinkID, EventType: "PROCESSING_STARTED"}))
 
 	require.NoError(t, svc.ApplyStatusEvent(ctx, StatusEvent{

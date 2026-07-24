@@ -116,6 +116,15 @@ func main() {
 		log.Warn("STATUS_QUEUE_URL não configurada — consumer desabilitado")
 	}
 
+	// consumer contínuo da fila de confirmação de upload (fan-out SNS do
+	// evento S3 ObjectCreated) — substitui o antigo PUT /links/:id/upload.
+	if cfg.UploadConfirmationQueueURL != "" {
+		s3Consumer := queue.NewS3UploadConsumer(sqsClient, cfg.UploadConfirmationQueueURL, svc, log)
+		go s3Consumer.Run(ctx)
+	} else {
+		log.Warn("UPLOAD_CONFIRMATION_QUEUE_URL não configurada — consumer desabilitado")
+	}
+
 	ddServiceName := ""
 	if cfg.DDAgentHost != "" {
 		ddServiceName = cfg.DDService

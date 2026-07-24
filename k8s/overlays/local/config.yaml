@@ -12,6 +12,7 @@ data:
   DYNAMO_EVENTS_TABLE: "LinkEvents"
   S3_BUCKET: "video-processing-bucket"
   STATUS_QUEUE_URL: "http://localstack-svc:4566/000000000000/video-processing-status-queue"
+  UPLOAD_CONFIRMATION_QUEUE_URL: "http://localstack-svc:4566/000000000000/video-upload-confirmation-queue"
   NOTIFICATION_TOPIC_ARN: "arn:aws:sns:us-east-1:000000000000:notification-topic"
   USE_USER_SVC_MOCK: "true"
   USERS_BASE_URL: "http://video-processor-users-api-svc.default.svc.cluster.local"

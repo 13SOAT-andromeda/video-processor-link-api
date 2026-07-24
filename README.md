@@ -16,7 +16,7 @@ Este é **só um dos microsserviços** da arquitetura descrita em `arquitetura-v
 | [`iac-video-processor-infra`](https://github.com/13SOAT-andromeda/iac-video-processor-infra) | VPC, EKS, ECR, filas/tópicos SNS/SQS, bucket S3 de vídeos, Ingress centralizado | Provisiona o bucket de vídeos (compartilhado com o processing-worker), a `video-processing-status-queue`, o repositório ECR `video-processor-link-api` e o path `/links` no Ingress |
 | [`iac-video-processor-gateway`](https://github.com/13SOAT-andromeda/iac-video-processor-gateway) | API Gateway HTTP API + REQUEST authorizer | Expõe `ANY /links` e `ANY /links/{proxy+}` atrás do authorizer, roteando via VPC Link para o pod deste serviço |
 | `video-processor-authorizer` / `video-processor-authentication-api` | Login (Lambda) + validação de JWT (Lambda) | Fora do escopo deste serviço — aqui o JWT é só **validado** (mesmo segredo `jwt-signing-key`), nunca emitido |
-| `video-processor-users-api` | Perfil de usuário (RDS) | Consultado via `GET /users/:id` para resolver e-mail/nome na notificação de falha (ver §7) |
+| `video-processor-users-api` | Perfil de usuário (RDS) | Consultado via `GET /api/users/:id` para resolver e-mail/nome na notificação de falha (ver §7) |
 
 Este serviço roda como **pod no EKS** (não Lambda): precisa de pool de conexão estável e, principalmente, de uma goroutine de consumer SQS contínuo, o que o modelo de invocação por evento do Lambda não atende bem.
 
@@ -28,21 +28,30 @@ flowchart LR
     subgraph EKS["pod EKS — este repositório"]
         API[links-service API]
         CONSUMER[status-queue consumer]
+        UPLOADCONSUMER[upload-confirmation consumer]
     end
     S3[(S3 videos bucket)]
     DDB[(DynamoDB Links / LinkEvents)]
     STATUSQ[/video-processing-status-queue/]
+    UPLOADQ[/video-upload-confirmation-queue/]
+    UPLOADTOPIC[[SNS video-upload-events-topic]]
     USERS[users-api]
     SNS[[SNS notification-events-topic]]
 
     CLIENT([Cliente]) --> AUTHZ --> API
     API -- presigned PUT --> S3
     API --> DDB
+    S3 -- ObjectCreated .mp4 --> UPLOADTOPIC
+    UPLOADTOPIC --> UPLOADQ
+    UPLOADQ --> UPLOADCONSUMER
+    UPLOADCONSUMER --> DDB
     CONSUMER --> STATUSQ
     CONSUMER --> DDB
     CONSUMER -. em PROCESSING_FAILED .-> USERS
     CONSUMER -. em PROCESSING_FAILED .-> SNS
 ```
+
+`video-upload-events-topic` também alimenta o worker de processamento (`video-processor-converter`, fora deste repositório) — o mesmo evento S3 é replicado (fan-out) pras duas filas, já que o S3 não permite duas notification rules com o mesmo filtro de sufixo apontando pra filas diferentes.
 
 ---
 
@@ -50,7 +59,7 @@ flowchart LR
 
 Dois componentes da plataforma real ainda não existem/estão fora do escopo deste repositório — o serviço já implementa o contrato real contra eles, mas roda em modo simulado até ficarem disponíveis:
 
-- **`users-api`** — resolução de e-mail/nome na notificação usa um mock determinístico (`USE_USER_SVC_MOCK=true`, padrão). O client HTTP real (`GET /users/:id`, dono do recurso ou `administrator`) já está implementado em [`internal/adapters/users/client.go`](internal/adapters/users/client.go): ele assina um **service token JWT (HS256)** com o mesmo segredo compartilhado `jwt-signing-key`, já que o consumer da fila não tem um JWT de usuário para anexar. Basta `USE_USER_SVC_MOCK=false` + `USERS_BASE_URL` quando a svc estiver no ar.
+- **`users-api`** — resolução de e-mail/nome na notificação usa um mock determinístico (`USE_USER_SVC_MOCK=true`, padrão local; em prod o padrão é `false`). O client HTTP real (`GET /api/users/:id`, dono do recurso ou `administrator`) está implementado em [`internal/adapters/users/client.go`](internal/adapters/users/client.go): ele assina um **service token JWT (HS256)** com o mesmo segredo compartilhado `jwt-signing-key`, já que o consumer da fila não tem um JWT de usuário para anexar.
 - **`video-processor-authorizer` (Lambda)** — um middleware JWT local (HS256, [`internal/adapters/httpapi/middleware.go`](internal/adapters/httpapi/middleware.go)) simula o comportamento do authorizer real: valida o token e injeta `userId`/`role` no contexto da requisição.
 
 ---
@@ -101,7 +110,7 @@ LINK_CREATED ─┬─> UPLOAD_PENDING ──> UPLOAD_COMPLETED ─┬─> PROCE
                                                          estado de processing)
 ```
 
-Definida em [`internal/domain/link/status.go`](internal/domain/link/status.go), sem nenhuma dependência de infraestrutura. `PUT /links/:id/upload` aplica `UPLOAD_COMPLETED` seguido de `PROCESSING_PENDING` numa só chamada. O consumer da status-queue ([`internal/app/service.go:ApplyStatusEvent`](internal/app/service.go)) é **idempotente**: reentrega da mesma mensagem (ou mensagem para um status já aplicado / estado terminal) é descartada sem erro.
+Definida em [`internal/domain/link/status.go`](internal/domain/link/status.go), sem nenhuma dependência de infraestrutura. `UPLOAD_COMPLETED` seguido de `PROCESSING_PENDING` é aplicado automaticamente pelo consumer da `video-upload-confirmation-queue` ([`internal/app/service.go:ConfirmUploadFromS3Event`](internal/app/service.go)) assim que o S3 confirma a gravação do arquivo bruto — não existe mais um endpoint HTTP de callback pós-upload; o frontend não precisa notificar o backend (§7). O consumer da status-queue ([`internal/app/service.go:ApplyStatusEvent`](internal/app/service.go)) é **idempotente**: reentrega da mesma mensagem (ou mensagem para um status já aplicado / estado terminal) é descartada sem erro. `ConfirmUploadFromS3Event` segue o mesmo princípio.
 
 ---
 
@@ -116,8 +125,9 @@ Autenticação: `Authorization: Bearer <jwt>` em todas as rotas.
 | `GET` | `/links/user/:id` | dono do recurso (`:id == userId` do JWT) ou `administrator` |
 | `GET` | `/links/:id` | dono ou `administrator` |
 | `GET` | `/links/:id/events` | dono ou `administrator` |
-| `PUT` | `/links/:id/upload` | dono ou `administrator` |
 | `GET` | `/links/:id/download` | dono ou `administrator` (exige status `PROCESSING_COMPLETED`) |
+
+Não existe rota de callback pós-upload: a transição `UPLOAD_COMPLETED -> PROCESSING_PENDING` é automática, disparada pelo evento `s3:ObjectCreated` do próprio S3 (§7).
 
 Erros: `400 INVALID_REQUEST` (payload malformado), `400 INVALID_FILE_SIZE` (>200MB), `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 LINK_NOT_FOUND`, `409 INVALID_STATUS_TRANSITION`, `500 INTERNAL_ERROR`.
 
@@ -166,8 +176,9 @@ make run                # sobe a API em :8080 + consumer da status-queue
 `make infra-up` sobe o LocalStack e roda [`deploy/localstack/init-aws.sh`](deploy/localstack/init-aws.sh) automaticamente (via `ready.d`), criando:
 
 - Tabelas DynamoDB `Links` (com GSI `userId-index` e TTL) e `LinkEvents` (com TTL)
-- Bucket S3 `video-processing-bucket`
-- Fila SQS `video-processing-status-queue`
+- Bucket S3 `video-processing-bucket`, com notification `s3:ObjectCreated:*` (filtro `.mp4`) direto pra fila abaixo — localmente sem SNS no meio (não há um segundo consumidor do mesmo evento disputando o filtro; em prod/dev real isso passa por um fan-out SNS, ver `iac-video-processor-infra`)
+- Fila SQS `video-processing-status-queue` (consumida por `queue.Consumer`)
+- Fila SQS `video-upload-confirmation-queue` (consumida por `queue.S3UploadConsumer` — confirma o upload automaticamente assim que o arquivo é gravado no bucket)
 - Tópico SNS `notification-topic`
 
 Para conferir que subiu certo:
@@ -189,11 +200,15 @@ curl -s -X POST localhost:8080/api/links \
   -d '{"fileName":"video.mp4","fileSize":1048576,"isPrivate":false}'
 
 # 2. subir o "vídeo" na presigned URL (uploadUrl do passo 1 — usar aspas duplas,
-#    a URL tem "&" que o shell interpreta como background job se não for aspeada)
+#    a URL tem "&" que o shell interpreta como background job se não for aspeada;
+#    o nome do arquivo precisa terminar em .mp4, é o filtro da notification do S3)
 curl -X PUT "<uploadUrl>" --data-binary @algum-arquivo.mp4
 
-# 3. callback pós-upload -> UPLOAD_COMPLETED -> PROCESSING_PENDING
-curl -s -X PUT localhost:8080/api/links/<linkId>/upload -H "Authorization: Bearer $TOKEN"
+# 3. UPLOAD_COMPLETED -> PROCESSING_PENDING é automático: o S3 notifica a
+#    video-upload-confirmation-queue, o consumer confirma o upload sozinho.
+#    Sem callback HTTP — só aguardar um instante e conferir (repita até sair
+#    de UPLOAD_PENDING, deve levar no máximo alguns segundos):
+curl -s localhost:8080/api/links/<linkId> -H "Authorization: Bearer $TOKEN" | grep status
 
 # 4. simular o processing-worker publicando na status-queue
 make simulate-worker LINK=<linkId> EVENT=PROCESSING_STARTED
@@ -252,6 +267,7 @@ Ver [`.env.example`](.env.example) para o arquivo completo. Resumo:
 | `DYNAMO_EVENTS_TABLE` | `LinkEvents` | `video-processor-link-events-db-prod` |
 | `S3_BUCKET` | `video-processing-bucket` | `video-processor-bucket-prod-<account_id>` (output `video_processor_bucket_name` do `iac-video-processor-infra`) |
 | `STATUS_QUEUE_URL` | criada pelo bootstrap local | output `video_processing_status_queue_url` do `iac-video-processor-infra` |
+| `UPLOAD_CONFIRMATION_QUEUE_URL` | criada pelo bootstrap local | output `video_upload_confirmation_queue_url` do `iac-video-processor-infra` (fan-out SNS do evento S3, ver §1/§7) |
 | `NOTIFICATION_TOPIC_ARN` | criada pelo bootstrap local | output `notification_events_topic_arn` do `iac-video-processor-infra` (o template `PROCESSING_FAILED` precisa estar cadastrado no `notification-service`) |
 | `USE_USER_SVC_MOCK` | `true` | `false` quando `users-api` estiver no ar |
 | `USERS_BASE_URL` | n/a (mock) | `http://video-processor-users-api-svc.default.svc.cluster.local` (Service real do cluster) |
