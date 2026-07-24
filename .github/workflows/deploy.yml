@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -29,7 +29,7 @@ jobs:
 
       - name: Login to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
 
       - name: Build and Push Docker Image
         env:
@@ -45,7 +45,7 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
       - name: Update Kubeconfig
-        run: aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name video-processor-eks-prod
+        run: aws eks update-kubeconfig --region "$AWS_REGION" --name video-processor-eks-prod
 
       # Filas/tópico/bucket levam o account ID no nome (bucket) ou existem só
       # dentro da conta atual da sessão AWS Academy Lab (que reseta a cada
@@ -64,12 +64,16 @@ jobs:
       # Credenciais de sessão pro pod acessar DynamoDB/S3/SQS/SNS diretamente
       # (mesmo padrão do users-api — ver RUNBOOK.md).
       - name: Create/update aws-session-credentials secret
+        env:
+          SESSION_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          SESSION_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
         run: |
           kubectl create secret generic aws-session-credentials -n default \
-            --from-literal=AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
-            --from-literal=AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
-            --from-literal=AWS_SESSION_TOKEN="${{ secrets.AWS_SESSION_TOKEN }}" \
-            --from-literal=AWS_REGION="${{ secrets.AWS_REGION }}" \
+            --from-literal=AWS_ACCESS_KEY_ID="$SESSION_ACCESS_KEY_ID" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="$SESSION_SECRET_ACCESS_KEY" \
+            --from-literal=AWS_SESSION_TOKEN="$SESSION_TOKEN" \
+            --from-literal=AWS_REGION="$AWS_REGION" \
             --dry-run=client -o yaml | kubectl apply -f -
 
       # JWT_SECRET nunca fica em texto puro no repo/workflow: resolvido do
@@ -97,11 +101,15 @@ jobs:
         run: kubectl apply -k k8s/overlays/aws
 
       - name: Set account-specific env vars
+        env:
+          STATUS_QUEUE_URL: ${{ steps.resolve.outputs.status_queue_url }}
+          UPLOAD_CONFIRMATION_QUEUE_URL: ${{ steps.resolve.outputs.upload_confirmation_queue_url }}
+          ACCOUNT_ID: ${{ steps.resolve.outputs.account_id }}
         run: |
           kubectl set env deployment/video-processor-link-api -n default \
-            STATUS_QUEUE_URL="${{ steps.resolve.outputs.status_queue_url }}" \
-            UPLOAD_CONFIRMATION_QUEUE_URL="${{ steps.resolve.outputs.upload_confirmation_queue_url }}" \
-            NOTIFICATION_TOPIC_ARN="arn:aws:sns:${{ secrets.AWS_REGION }}:${{ steps.resolve.outputs.account_id }}:notification-events-topic-prod" \
+            STATUS_QUEUE_URL="$STATUS_QUEUE_URL" \
+            UPLOAD_CONFIRMATION_QUEUE_URL="$UPLOAD_CONFIRMATION_QUEUE_URL" \
+            NOTIFICATION_TOPIC_ARN="arn:aws:sns:${AWS_REGION}:${ACCOUNT_ID}:notification-events-topic-prod" \
             S3_BUCKET="video-processor-bucket-prod"
 
       - name: Restart deployment
