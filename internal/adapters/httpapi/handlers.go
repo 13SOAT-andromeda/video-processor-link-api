@@ -42,7 +42,6 @@ func Router(svc *app.Service, jwtSecret, ddServiceName string) *gin.Engine {
 		auth.GET("/links/user/:id", h.ListByUser)
 		auth.GET("/links/:id", h.GetLink)
 		auth.GET("/links/:id/events", h.ListEvents)
-		auth.PUT("/links/:id/upload", h.ConfirmUpload)
 		auth.GET("/links/:id/download", h.Download)
 	}
 	return r
@@ -106,15 +105,6 @@ func (h *Handlers) ListEvents(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, events)
-}
-
-func (h *Handlers) ConfirmUpload(c *gin.Context) {
-	l, err := h.svc.ConfirmUpload(c.Request.Context(), c.Param("id"), c.GetString("userId"), c.GetString("role"))
-	if err != nil {
-		abortWithError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, l)
 }
 
 func (h *Handlers) Download(c *gin.Context) {

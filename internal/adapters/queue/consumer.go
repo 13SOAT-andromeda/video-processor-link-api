@@ -1,6 +1,7 @@
-// Package queue implementa o consumer contínuo (goroutine) da
-// video-processing-status-queue — a razão de o links-service rodar em pod
-// EKS e não em Lambda (ADR-011). Sem DLQ própria: erros de consumo são
+// Package queue implementa os consumers contínuos (goroutine) da
+// video-processing-status-queue (Consumer) e da video-upload-confirmation-queue
+// (S3UploadConsumer) — a razão de o links-service rodar em pod EKS e não em
+// Lambda (ADR-011). Nenhuma das duas tem DLQ própria: erros de consumo são
 // tratados internamente (ADR-003, adendo v5).
 package queue
 
