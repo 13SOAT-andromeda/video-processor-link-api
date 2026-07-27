@@ -1,0 +1,119 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [main]
+    # paths:
+    #   - 'cmd/**'
+    #   - 'internal/**'
+    #   - 'k8s/**'
+    #   - 'Dockerfile'
+    #   - '.github/workflows/deploy.yml'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+
+      - name: Build and Push Docker Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: video-processor-link-api-prod
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Update Kubeconfig
+        run: aws eks update-kubeconfig --region "$AWS_REGION" --name video-processor-eks-prod
+
+      # Filas/tópico/bucket levam o account ID no nome (bucket) ou existem só
+      # dentro da conta atual da sessão AWS Academy Lab (que reseta a cada
+      # sessão) — resolvidos em tempo de execução, nunca hardcoded no repo.
+      # Mesmo padrão do RUNBOOK.md do iac-video-processor-infra.
+      - name: Resolve account-specific values
+        id: resolve
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          STATUS_QUEUE_URL=$(aws sqs get-queue-url --queue-name video-processing-status-queue-prod --query QueueUrl --output text)
+          UPLOAD_CONFIRMATION_QUEUE_URL=$(aws sqs get-queue-url --queue-name video-upload-confirmation-queue-prod --query QueueUrl --output text)
+          echo "account_id=$ACCOUNT_ID" >> "$GITHUB_OUTPUT"
+          echo "status_queue_url=$STATUS_QUEUE_URL" >> "$GITHUB_OUTPUT"
+          echo "upload_confirmation_queue_url=$UPLOAD_CONFIRMATION_QUEUE_URL" >> "$GITHUB_OUTPUT"
+
+      # Credenciais de sessão pro pod acessar DynamoDB/S3/SQS/SNS diretamente
+      # (mesmo padrão do users-api — ver RUNBOOK.md).
+      - name: Create/update aws-session-credentials secret
+        env:
+          SESSION_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          SESSION_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+        run: |
+          kubectl create secret generic aws-session-credentials -n default \
+            --from-literal=AWS_ACCESS_KEY_ID="$SESSION_ACCESS_KEY_ID" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="$SESSION_SECRET_ACCESS_KEY" \
+            --from-literal=AWS_SESSION_TOKEN="$SESSION_TOKEN" \
+            --from-literal=AWS_REGION="$AWS_REGION" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # JWT_SECRET nunca fica em texto puro no repo/workflow: resolvido do
+      # Secrets Manager (jwt-signing-key-prod, gerado pelo terraform da infra
+      # e compartilhado com authentication-api/authorizer/users-api) e
+      # injetado só no k8s Secret, nunca logado.
+      - name: Create/update link-api-secrets (JWT_SECRET)
+        run: |
+          JWT_SECRET=$(aws secretsmanager get-secret-value --secret-id jwt-signing-key-prod --query SecretString --output text)
+          kubectl create secret generic link-api-secrets -n default \
+            --from-literal=JWT_SECRET="$JWT_SECRET" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # k8s/overlays/aws/kustomization.yaml mantém REPLACE_ME_... como
+      # placeholder versionado (não é account-específico) — substituído só
+      # no checkout efêmero do runner, nunca commitado de volta.
+      - name: Point overlay at the pushed image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: video-processor-link-api-prod
+        run: |
+          sed -i "s|REPLACE_ME_ECR_LINK_API_REPOSITORY_URL|${ECR_REGISTRY}/${ECR_REPOSITORY}|g" k8s/overlays/aws/kustomization.yaml
+
+      - name: Apply Kustomize
+        run: kubectl apply -k k8s/overlays/aws
+
+      - name: Set account-specific env vars
+        env:
+          STATUS_QUEUE_URL: ${{ steps.resolve.outputs.status_queue_url }}
+          UPLOAD_CONFIRMATION_QUEUE_URL: ${{ steps.resolve.outputs.upload_confirmation_queue_url }}
+          ACCOUNT_ID: ${{ steps.resolve.outputs.account_id }}
+        run: |
+          kubectl set env deployment/video-processor-link-api -n default \
+            STATUS_QUEUE_URL="$STATUS_QUEUE_URL" \
+            UPLOAD_CONFIRMATION_QUEUE_URL="$UPLOAD_CONFIRMATION_QUEUE_URL" \
+            NOTIFICATION_TOPIC_ARN="arn:aws:sns:${AWS_REGION}:${ACCOUNT_ID}:notification-events-topic-prod" \
+            S3_BUCKET="video-processor-bucket-prod"
+
+      - name: Restart deployment
+        run: kubectl rollout restart deployment/video-processor-link-api -n default
+
+      - name: Wait for rollout
+        run: kubectl rollout status deployment/video-processor-link-api -n default --timeout=180s
