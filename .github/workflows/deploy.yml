@@ -110,7 +110,7 @@ jobs:
             STATUS_QUEUE_URL="$STATUS_QUEUE_URL" \
             UPLOAD_CONFIRMATION_QUEUE_URL="$UPLOAD_CONFIRMATION_QUEUE_URL" \
             NOTIFICATION_TOPIC_ARN="arn:aws:sns:${AWS_REGION}:${ACCOUNT_ID}:notification-events-topic-prod" \
-            S3_BUCKET="video-processor-bucket-prod"
+            S3_BUCKET="video-processor-bucket-prod-${ACCOUNT_ID}"
 
       - name: Restart deployment
         run: kubectl rollout restart deployment/video-processor-link-api -n default
