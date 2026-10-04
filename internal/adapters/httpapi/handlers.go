@@ -28,7 +28,14 @@ func Router(svc *app.Service, jwtSecret, ddServiceName string) *gin.Engine {
 		r.Use(gintrace.Middleware(ddServiceName))
 	}
 
-	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
+	healthHandler := func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) }
+	r.GET("/healthz", healthHandler)
+	// O health check do ALB (alb.ingress.kubernetes.io/healthcheck-path no
+	// Ingress) é compartilhado por todos os backends e aponta para
+	// /api/health — mesma rota que o users-api já expõe. Sem este alias, o
+	// target group deste serviço nunca fica healthy (404), mesmo com a app
+	// no ar (probes do k8s continuam usando /healthz acima).
+	r.GET("/api/health", healthHandler)
 
 	// Grupo /api: o API Gateway reescreve o path recebido (/links/...) para
 	// /api$request.path antes de encaminhar pro ALB (mesma convenção do
